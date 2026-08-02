@@ -5,101 +5,65 @@
 #   redmine_username  - Redmine API user
 #   redmine_password  - Redmine API password
 
-- name: Check certificates on target servers
-  hosts: target_servers
-  become: true
-  gather_facts: true
-  vars:
-    _cert_dirs:
-      nginx: /opt/myapp/ssl
-      apache: /etc/pki/tls/certs
-
-  tasks:
-    - name: Read certificate file
-      community.crypto.x509_certificate_info:
-        path: "{{ _cert_dirs[inventory_hostname] }}/{{ inventory_hostname }}.{{ route53_domain }}.crt"
-      register: _cert
-
-    - name: Build report
-      ansible.builtin.set_fact:
-        cert_report:
-          server: "{{ inventory_hostname }}"
-          fqdn: "{{ inventory_hostname }}.{{ route53_domain }}"
-          not_after: "{{ _cert.not_after[:8] | regex_replace('(\\d{4})(\\d{2})(\\d{2})', '\\1-\\2-\\3') }}"
-          valid_days: >-
-            {{ ((_cert.not_after[:8] | to_datetime('%Y%m%d')) -
-                (ansible_date_time.date | to_datetime('%Y-%m-%d'))).days }}
-
-- name: Check certificates on external sites
+- name: Check certificates
   hosts: localhost
   connection: local
   gather_facts: true
   vars:
-    _external_sites:
+    _check_sites:
+      - "nginx.{{ route53_domain }}"
+      - "apache.{{ route53_domain }}"
       - www.redhat.com
       - example.com
       - expired.badssl.com
       - expired-rsa-dv.ssl.com
 
   tasks:
-    - name: Fetch certificate from external site
+    - name: Set JST timestamps
+      ansible.builtin.set_fact:
+        _now_jst: "{{ '%Y-%m-%d %H:%M JST' | strftime(ansible_date_time.epoch | int + 32400) }}"
+        _today_jst_epoch: "{{ ansible_date_time.epoch | int + 32400 }}"
+
+    - name: Fetch certificate from each site
       community.crypto.get_certificate:
         host: "{{ item }}"
         port: 443
-      register: _ext_certs
-      loop: "{{ _external_sites }}"
+      register: _certs
+      loop: "{{ _check_sites }}"
       ignore_errors: true
 
-    - name: Parse external certificates
+    - name: Build report entries
       ansible.builtin.set_fact:
-        _external_reports: >-
-          {{ _external_reports | default([]) + [
-            {
-              'server': item.item,
-              'fqdn': item.item,
-              'not_after': item.not_after[:8] | regex_replace('(\d{4})(\d{2})(\d{2})', '\1-\2-\3'),
-              'valid_days': (((item.not_after[:8] | to_datetime('%Y%m%d')) -
-                             (ansible_date_time.date | to_datetime('%Y-%m-%d'))).days) | string
-            }
-          ] }}
-      loop: "{{ _ext_certs.results }}"
-      when: item is not failed
+        _reports: >-
+          {{ _reports | default([]) + [_entry] }}
+      vars:
+        _has_cert: "{{ item.not_after is defined }}"
+        _na_entry:
+          fqdn: "{{ item.item }}"
+          not_after_jst: "N/A"
+          valid_days: "-1"
+        _cert_epoch: >-
+          {{ (item.not_after[:14] | to_datetime('%Y%m%d%H%M%S')).strftime('%s') | int
+             if _has_cert | bool else 0 }}
+        _cert_entry:
+          fqdn: "{{ item.item }}"
+          not_after_jst: "{{ '%Y-%m-%d' | strftime(_cert_epoch | int + 32400) }}"
+          valid_days: >-
+            {{ (('%Y%m%d' | strftime(_cert_epoch | int + 32400) | to_datetime('%Y%m%d')) -
+                ('%Y%m%d' | strftime(_today_jst_epoch | int) | to_datetime('%Y%m%d'))).days }}
+        _entry: "{{ _cert_entry if _has_cert | bool else _na_entry }}"
+      loop: "{{ _certs.results }}"
 
-    - name: Handle failed external checks
-      ansible.builtin.set_fact:
-        _external_reports: >-
-          {{ _external_reports | default([]) + [
-            {
-              'server': item.item,
-              'fqdn': item.item,
-              'not_after': 'N/A',
-              'valid_days': '-1'
-            }
-          ] }}
-      loop: "{{ _ext_certs.results }}"
-      when: item is failed
-
-- name: Display certificate report
-  hosts: localhost
-  connection: local
-  gather_facts: false
-
-  tasks:
     - name: Build report content
       ansible.builtin.set_fact:
         _report_content: |-
-          Last update: {{ hostvars['localhost'].ansible_date_time.iso8601 }}
+          Last update: {{ _now_jst }}
 
-          | Server | FQDN | Expiration Date | Valid Days | Status |
-          |--------|------|-----------------|------------|--------|
-          {% for h in groups['target_servers'] %}
-          {% set r = hostvars[h].cert_report %}
+          | FQDN | Expiration (JST) | Valid Days | Status |
+          |------|-----------------|------------|--------|
+          {% for r in _reports %}
           {% set d = r.valid_days | int %}
-          | {{ r.server }} | {{ r.fqdn }} | {{ r.not_after }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 14 else '⚠️ Warning' if d <= 47 else '🟢 OK' }} |
-          {% endfor %}
-          {% for r in _external_reports %}
-          {% set d = r.valid_days | int %}
-          | {{ r.server }} | {{ r.fqdn }} | {{ r.not_after }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 14 else '⚠️ Warning' if d <= 47 else '🟢 OK' }} |
+          | [{{ r.fqdn }}](https://{{ r.fqdn }}) | {{ r.not_after_jst }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 14 else '⚠️ Warning' if d <= 47 else '🟢 OK' }} |
           {% endfor %}
 
           **Legend:** 🟢 OK (48+ days) / ⚠️ Warning (15-47 days) / 🚨 Critical (1-14 days) / ☠️ Expired (0 days or less)
