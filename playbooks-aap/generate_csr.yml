@@ -1,0 +1,45 @@
+---
+# Required variables (from extra_vars):
+#   route53_domain - e.g. demo.emacs-lisp.net
+
+- name: Generate CSR on target server
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _fqdn: "{{ inventory_hostname }}.{{ route53_domain }}"
+    _key_dirs:
+      nginx: /opt/myapp/ssl
+      apache: /etc/pki/tls/private
+
+  tasks:
+    - name: Generate private key
+      community.crypto.openssl_privatekey:
+        path: "{{ _key_dirs[inventory_hostname] }}/{{ _fqdn }}.key"
+        type: RSA
+        size: 4096
+        mode: "0600"
+
+    - name: Generate CSR
+      community.crypto.openssl_csr:
+        path: "/tmp/{{ _fqdn }}.csr"
+        privatekey_path: "{{ _key_dirs[inventory_hostname] }}/{{ _fqdn }}.key"
+        common_name: "{{ _fqdn }}"
+        subject_alt_name: "DNS:{{ _fqdn }}"
+        key_usage:
+          - digitalSignature
+          - keyEncipherment
+        extended_key_usage:
+          - clientAuth
+          - serverAuth
+
+    - name: Read CSR content
+      ansible.builtin.slurp:
+        src: "/tmp/{{ _fqdn }}.csr"
+      register: _csr_content
+
+    - name: Pass CSR data to next job
+      ansible.builtin.set_stats:
+        data:
+          csr_data: "{{ _csr_content.content | b64decode }}"
+          cert_common_name: "{{ _fqdn }}"
