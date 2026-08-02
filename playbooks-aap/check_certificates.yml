@@ -1,0 +1,122 @@
+---
+# Required variables (from AAP credentials or extra_vars):
+#   route53_domain    - e.g. demo.emacs-lisp.net
+#   redmine_url       - e.g. http://10.100.11.x:8888
+#   redmine_username  - Redmine API user
+#   redmine_password  - Redmine API password
+
+- name: Check certificates on target servers
+  hosts: target_servers
+  become: true
+  gather_facts: true
+  vars:
+    _cert_dirs:
+      nginx: /opt/myapp/ssl
+      apache: /etc/pki/tls/certs
+
+  tasks:
+    - name: Read certificate file
+      community.crypto.x509_certificate_info:
+        path: "{{ _cert_dirs[inventory_hostname] }}/{{ inventory_hostname }}.{{ route53_domain }}.crt"
+      register: _cert
+
+    - name: Build report
+      ansible.builtin.set_fact:
+        cert_report:
+          server: "{{ inventory_hostname }}"
+          fqdn: "{{ inventory_hostname }}.{{ route53_domain }}"
+          not_after: "{{ _cert.not_after[:8] | regex_replace('(\\d{4})(\\d{2})(\\d{2})', '\\1-\\2-\\3') }}"
+          valid_days: >-
+            {{ ((_cert.not_after[:8] | to_datetime('%Y%m%d')) -
+                (ansible_date_time.date | to_datetime('%Y-%m-%d'))).days }}
+
+- name: Check certificates on external sites
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    _external_sites:
+      - www.redhat.com
+      - example.com
+      - expired.badssl.com
+      - expired-rsa-dv.ssl.com
+
+  tasks:
+    - name: Fetch certificate from external site
+      community.crypto.get_certificate:
+        host: "{{ item }}"
+        port: 443
+      register: _ext_certs
+      loop: "{{ _external_sites }}"
+      ignore_errors: true
+
+    - name: Parse external certificates
+      ansible.builtin.set_fact:
+        _external_reports: >-
+          {{ _external_reports | default([]) + [
+            {
+              'server': item.item,
+              'fqdn': item.item,
+              'not_after': item.not_after[:8] | regex_replace('(\d{4})(\d{2})(\d{2})', '\1-\2-\3'),
+              'valid_days': (((item.not_after[:8] | to_datetime('%Y%m%d')) -
+                             (ansible_date_time.date | to_datetime('%Y-%m-%d'))).days) | string
+            }
+          ] }}
+      loop: "{{ _ext_certs.results }}"
+      when: item is not failed
+
+    - name: Handle failed external checks
+      ansible.builtin.set_fact:
+        _external_reports: >-
+          {{ _external_reports | default([]) + [
+            {
+              'server': item.item,
+              'fqdn': item.item,
+              'not_after': 'N/A',
+              'valid_days': '-1'
+            }
+          ] }}
+      loop: "{{ _ext_certs.results }}"
+      when: item is failed
+
+- name: Display certificate report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Build report content
+      ansible.builtin.set_fact:
+        _report_content: |-
+          Last update: {{ hostvars['localhost'].ansible_date_time.iso8601 }}
+
+          | Server | FQDN | Expiration Date | Valid Days | Status |
+          |--------|------|-----------------|------------|--------|
+          {% for h in groups['target_servers'] %}
+          {% set r = hostvars[h].cert_report %}
+          {% set d = r.valid_days | int %}
+          | {{ r.server }} | {{ r.fqdn }} | {{ r.not_after }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 14 else '⚠️ Warning' if d <= 47 else '🟢 OK' }} |
+          {% endfor %}
+          {% for r in _external_reports %}
+          {% set d = r.valid_days | int %}
+          | {{ r.server }} | {{ r.fqdn }} | {{ r.not_after }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 14 else '⚠️ Warning' if d <= 47 else '🟢 OK' }} |
+          {% endfor %}
+
+          **Legend:** 🟢 OK (48+ days) / ⚠️ Warning (15-47 days) / 🚨 Critical (1-14 days) / ☠️ Expired (0 days or less)
+
+    - name: Display report
+      ansible.builtin.debug:
+        msg: "{{ _report_content }}"
+
+    - name: Update Redmine wiki page
+      ansible.builtin.uri:
+        url: "{{ redmine_url }}/projects/{{ redmine_project | default('aap-demo') }}/wiki/{{ redmine_wiki_page | default('Certificate_Report') }}.json"
+        method: PUT
+        body_format: json
+        body:
+          wiki_page:
+            text: "{{ _report_content }}"
+        url_username: "{{ redmine_username }}"
+        url_password: "{{ redmine_password }}"
+        force_basic_auth: true
+        status_code: [200, 201, 204]

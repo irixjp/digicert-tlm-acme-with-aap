@@ -1,0 +1,21 @@
+# Ignore everything by default — only AAP-relevant files are committed
+*
+
+# AAP playbooks
+!playbooks-aap/
+!playbooks-aap/**
+
+# Collection requirements (AAP installs from this)
+!collections/
+!collections/requirements.yml
+
+# Roles used by AAP playbooks
+!roles/
+!roles/digicert_acme_cert/
+!roles/digicert_acme_cert/**
+!roles/cert_deploy/
+!roles/cert_deploy/**
+!roles/aws_route53_manage_record/
+!roles/aws_route53_manage_record/**
+
+!.gitignore
