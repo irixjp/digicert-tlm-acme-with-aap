@@ -27,16 +27,16 @@
         body:
           issue:
             project_id: "{{ redmine_project }}"
-            subject: "証明書更新完了: {{ cert_common_name }}"
+            subject: "Certificate Renewed: {{ cert_common_name }}"
             description: |-
-              自動証明書更新が完了しました。
+              Automatic certificate renewal completed.
 
-              |項目|値|
+              |Item|Value|
               |---|---|
-              |対象|{{ cert_common_name }}|
-              |更新前有効期限|{{ cert_not_after_before }}|
-              |更新前残日数|{{ cert_valid_days_before }} 日|
-              |更新日時|{{ _now_jst }}|
+              |Target|{{ cert_common_name }}|
+              |Previous Expiry|{{ cert_not_after_before }}|
+              |Days Remaining Before Renewal|{{ cert_valid_days_before }}|
+              |Renewed At|{{ _now_jst }}|
         url_username: "{{ redmine_username }}"
         url_password: "{{ redmine_password }}"
         force_basic_auth: true
