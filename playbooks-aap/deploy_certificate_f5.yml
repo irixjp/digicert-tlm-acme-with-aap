@@ -1,0 +1,35 @@
+---
+# Required variables (from AAP credentials or extra_vars):
+#   private_key_data   - PEM private key (from Job 1 set_stats)
+#   fullchain_data     - fullchain PEM certificate (from Job 2 set_stats)
+#   cert_common_name   - FQDN e.g. f5.demo.emacs-lisp.net (from Job 1 set_stats)
+#   f5_admin_password  - F5 admin password
+#   route53_domain     - e.g. demo.emacs-lisp.net
+
+- name: Deploy certificate to F5 BIG-IP
+  hosts: f5
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    f5_provider:
+      server: "{{ ansible_host }}"
+      user: "{{ ansible_user }}"
+      password: "{{ f5_admin_password }}"
+      server_port: 8443
+      validate_certs: false
+
+  tasks:
+    - name: Import SSL key to F5
+      f5networks.f5_modules.bigip_ssl_key:
+        name: "{{ cert_common_name }}"
+        content: "{{ private_key_data }}"
+        state: present
+        provider: "{{ f5_provider }}"
+
+    - name: Import SSL certificate to F5
+      f5networks.f5_modules.bigip_ssl_certificate:
+        name: "{{ cert_common_name }}"
+        content: "{{ fullchain_data }}"
+        state: present
+        provider: "{{ f5_provider }}"
