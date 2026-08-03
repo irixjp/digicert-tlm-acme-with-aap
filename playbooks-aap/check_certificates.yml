@@ -64,10 +64,10 @@
           |------|-----------------|------------|--------|
           {% for r in _reports %}
           {% set d = r.valid_days | int %}
-          | [{{ r.fqdn }}](https://{{ r.fqdn }}) | {{ r.not_after_jst }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 14 else '⚠️ Warning' if d <= 47 else '🟢 OK' }} |
+          | [{{ r.fqdn }}](https://{{ r.fqdn }}) | {{ r.not_after_jst }} | {{ d }} | {{ '☠️ Expired' if d <= 0 else '🚨 Critical' if d <= 10 else '⚠️ Warning' if d <= 20 else '🟢 OK' }} |
           {% endfor %}
 
-          **Legend:** 🟢 OK (48+ days) / ⚠️ Warning (15-47 days) / 🚨 Critical (1-14 days) / ☠️ Expired (0 days or less)
+          **Legend:** 🟢 OK (21+ days) / ⚠️ Warning (11-20 days) / 🚨 Critical (1-10 days) / ☠️ Expired (0 days or less)
 
     - name: Display report
       ansible.builtin.debug:
