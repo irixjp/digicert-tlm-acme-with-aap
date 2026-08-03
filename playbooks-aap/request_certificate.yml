@@ -37,6 +37,7 @@
 
     - name: Register ACME account with EAB
       community.crypto.acme_account:
+        select_crypto_backend: cryptography
         acme_version: 2
         acme_directory: "{{ digicert_acme_dir_url }}"
         account_key_src: "{{ _work_dir }}/account.pem"
@@ -53,57 +54,63 @@
 
     - name: Request certificate (get DNS-01 challenge)
       community.crypto.acme_certificate:
+        select_crypto_backend: cryptography
         acme_version: 2
         acme_directory: "{{ digicert_acme_dir_url }}"
         account_key_src: "{{ _work_dir }}/account.pem"
         modify_account: false
         csr: "{{ _work_dir }}/{{ cert_common_name }}.csr"
         dest: "{{ _work_dir }}/{{ cert_common_name }}.pem"
-        fullchain_dest: "{{ _work_dir }}/{{ cert_common_name }}-fullchain.pem"
-        chain_dest: "{{ _work_dir }}/{{ cert_common_name }}-chain.pem"
         challenge: dns-01
         force: true
       register: _acme_challenge
 
     - name: Extract DNS-01 challenge record and value
+      vars:
+        _json_query: "challenge_data.*"
       ansible.builtin.set_fact:
         _challenge_record: >-
-          {{ (_acme_challenge | community.general.json_query('challenge_data.*'))[0]['dns-01']['record'] }}
+          {{ (_acme_challenge | community.general.json_query(_json_query))[0]['dns-01']['record'] }}
         _challenge_value: >-
-          {{ (_acme_challenge | community.general.json_query('challenge_data.*'))[0]['dns-01']['resource_value'] }}
-
-    - name: Add TXT record for DNS-01 challenge
-      amazon.aws.route53:
-        zone: "{{ route53_domain }}"
-        record: "{{ _challenge_record }}"
-        type: TXT
-        ttl: 60
-        value: '"{{ _challenge_value }}"'
-        overwrite: true
-        wait: true
-        state: present
+          {{ (_acme_challenge | community.general.json_query(_json_query))[0]['dns-01']['resource_value'] }}
 
     - name: Validate challenge and retrieve certificate
-      community.crypto.acme_certificate:
-        acme_version: 2
-        acme_directory: "{{ digicert_acme_dir_url }}"
-        account_key_src: "{{ _work_dir }}/account.pem"
-        modify_account: false
-        csr: "{{ _work_dir }}/{{ cert_common_name }}.csr"
-        dest: "{{ _work_dir }}/{{ cert_common_name }}.pem"
-        fullchain_dest: "{{ _work_dir }}/{{ cert_common_name }}-fullchain.pem"
-        chain_dest: "{{ _work_dir }}/{{ cert_common_name }}-chain.pem"
-        challenge: dns-01
-        data: "{{ _acme_challenge }}"
+      block:
+        - name: Add TXT record for DNS-01 challenge
+          amazon.aws.route53:
+            zone: "{{ route53_domain }}"
+            record: "{{ _challenge_record }}"
+            type: TXT
+            ttl: 60
+            value: '"{{ _challenge_value }}"'
+            overwrite: true
+            wait: true
+            state: present
 
-    - name: Remove TXT record
-      amazon.aws.route53:
-        zone: "{{ route53_domain }}"
-        record: "{{ _challenge_record }}"
-        type: TXT
-        overwrite: true
-        wait: false
-        state: absent
+        - name: Validate challenge and retrieve certificate
+          community.crypto.acme_certificate:
+            select_crypto_backend: cryptography
+            acme_version: 2
+            acme_directory: "{{ digicert_acme_dir_url }}"
+            account_key_src: "{{ _work_dir }}/account.pem"
+            modify_account: false
+            csr: "{{ _work_dir }}/{{ cert_common_name }}.csr"
+            dest: "{{ _work_dir }}/{{ cert_common_name }}.pem"
+            fullchain_dest: "{{ _work_dir }}/{{ cert_common_name }}-fullchain.pem"
+            chain_dest: "{{ _work_dir }}/{{ cert_common_name }}-chain.pem"
+            challenge: dns-01
+            data: "{{ _acme_challenge }}"
+            deactivate_authzs: true
+
+      always:
+        - name: Remove TXT record
+          amazon.aws.route53:
+            zone: "{{ route53_domain }}"
+            record: "{{ _challenge_record }}"
+            type: TXT
+            overwrite: true
+            wait: true
+            state: absent
 
     - name: Read certificate files
       ansible.builtin.slurp:
