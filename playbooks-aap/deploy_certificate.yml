@@ -1,0 +1,30 @@
+---
+# Required variables (from AAP credentials or extra_vars):
+#   fullchain_data    - fullchain PEM certificate (from Job 2 set_stats)
+#   cert_common_name  - FQDN e.g. apache.demo.emacs-lisp.net (from Job 1 set_stats)
+#   route53_domain    - e.g. demo.emacs-lisp.net
+
+- name: Deploy certificate
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _fqdn: "{{ inventory_hostname }}.{{ route53_domain }}"
+    _cert_dirs:
+      nginx: /opt/myapp/ssl
+      apache: /etc/pki/tls/certs
+    _services:
+      nginx: nginx
+      apache: httpd
+
+  tasks:
+    - name: Deploy fullchain certificate
+      ansible.builtin.copy:
+        content: "{{ fullchain_data }}"
+        dest: "{{ _cert_dirs[inventory_hostname] }}/{{ _fqdn }}.crt"
+        mode: "0644"
+
+    - name: Restart service
+      ansible.builtin.systemd_service:
+        name: "{{ _services[inventory_hostname] }}"
+        state: restarted

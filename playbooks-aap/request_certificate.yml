@@ -1,0 +1,125 @@
+---
+# Required variables (from AAP credentials or extra_vars):
+#   csr_data              - PEM-encoded CSR (from Job 1 set_stats)
+#   cert_common_name      - FQDN e.g. apache.demo.emacs-lisp.net (from Job 1 set_stats)
+#   digicert_acme_dir_url - ACME directory URL from TLM
+#   digicert_eab_kid      - EAB key identifier from TLM
+#   digicert_eab_key      - EAB HMAC key from TLM
+#   digicert_contact_email - ACME account contact email
+#   route53_domain        - e.g. demo.emacs-lisp.net
+
+- name: Request certificate via ACME
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _work_dir: /tmp/acme-{{ cert_common_name }}
+
+  tasks:
+    - name: Create work directory
+      ansible.builtin.file:
+        path: "{{ _work_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write CSR to file
+      ansible.builtin.copy:
+        content: "{{ csr_data }}"
+        dest: "{{ _work_dir }}/{{ cert_common_name }}.csr"
+        mode: "0600"
+
+    - name: Generate ACME account key
+      community.crypto.openssl_privatekey:
+        path: "{{ _work_dir }}/account.pem"
+        type: RSA
+        size: 2048
+        mode: "0600"
+
+    - name: Register ACME account with EAB
+      community.crypto.acme_account:
+        acme_version: 2
+        acme_directory: "{{ digicert_acme_dir_url }}"
+        account_key_src: "{{ _work_dir }}/account.pem"
+        validate_certs: true
+        allow_creation: true
+        terms_agreed: true
+        contact:
+          - "mailto:{{ digicert_contact_email }}"
+        external_account_binding:
+          kid: "{{ digicert_eab_kid }}"
+          key: "{{ digicert_eab_key }}"
+          alg: HS256
+        state: present
+
+    - name: Request certificate (get DNS-01 challenge)
+      community.crypto.acme_certificate:
+        acme_version: 2
+        acme_directory: "{{ digicert_acme_dir_url }}"
+        account_key_src: "{{ _work_dir }}/account.pem"
+        modify_account: false
+        csr: "{{ _work_dir }}/{{ cert_common_name }}.csr"
+        dest: "{{ _work_dir }}/{{ cert_common_name }}.pem"
+        fullchain_dest: "{{ _work_dir }}/{{ cert_common_name }}-fullchain.pem"
+        chain_dest: "{{ _work_dir }}/{{ cert_common_name }}-chain.pem"
+        challenge: dns-01
+        force: true
+      register: _acme_challenge
+
+    - name: Extract DNS-01 challenge record and value
+      ansible.builtin.set_fact:
+        _challenge_record: >-
+          {{ (_acme_challenge | community.general.json_query('challenge_data.*'))[0]['dns-01']['record'] }}
+        _challenge_value: >-
+          {{ (_acme_challenge | community.general.json_query('challenge_data.*'))[0]['dns-01']['resource_value'] }}
+
+    - name: Add TXT record for DNS-01 challenge
+      amazon.aws.route53:
+        zone: "{{ route53_domain }}"
+        record: "{{ _challenge_record }}"
+        type: TXT
+        ttl: 60
+        value: '"{{ _challenge_value }}"'
+        overwrite: true
+        wait: true
+        state: present
+
+    - name: Validate challenge and retrieve certificate
+      community.crypto.acme_certificate:
+        acme_version: 2
+        acme_directory: "{{ digicert_acme_dir_url }}"
+        account_key_src: "{{ _work_dir }}/account.pem"
+        modify_account: false
+        csr: "{{ _work_dir }}/{{ cert_common_name }}.csr"
+        dest: "{{ _work_dir }}/{{ cert_common_name }}.pem"
+        fullchain_dest: "{{ _work_dir }}/{{ cert_common_name }}-fullchain.pem"
+        chain_dest: "{{ _work_dir }}/{{ cert_common_name }}-chain.pem"
+        challenge: dns-01
+        data: "{{ _acme_challenge }}"
+
+    - name: Remove TXT record
+      amazon.aws.route53:
+        zone: "{{ route53_domain }}"
+        record: "{{ _challenge_record }}"
+        type: TXT
+        overwrite: true
+        wait: false
+        state: absent
+
+    - name: Read certificate files
+      ansible.builtin.slurp:
+        src: "{{ _work_dir }}/{{ cert_common_name }}{{ item }}"
+      register: _cert_files
+      loop:
+        - .pem
+        - -fullchain.pem
+
+    - name: Pass certificate data to next job
+      ansible.builtin.set_stats:
+        data:
+          cert_data: "{{ _cert_files.results[0].content | b64decode }}"
+          fullchain_data: "{{ _cert_files.results[1].content | b64decode }}"
+
+    - name: Clean up work directory
+      ansible.builtin.file:
+        path: "{{ _work_dir }}"
+        state: absent
