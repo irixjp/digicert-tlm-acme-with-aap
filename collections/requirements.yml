@@ -5,3 +5,4 @@ collections:
   - name: community.general
   - name: containers.podman
   - name: awx.awx
+  - name: f5networks.f5_modules
