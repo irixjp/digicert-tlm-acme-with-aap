@@ -1,0 +1,48 @@
+---
+# Required variables (from AAP credentials or extra_vars):
+#   cert_common_name        - FQDN e.g. apache.demo.emacs-lisp.net (from Job 1 set_stats)
+#   cert_not_after_before   - expiry date before renewal (from check job set_stats)
+#   cert_valid_days_before  - days remaining before renewal (from check job set_stats)
+#   redmine_url             - e.g. http://10.100.11.x:8888
+#   redmine_username        - Redmine API user
+#   redmine_password        - Redmine API password
+
+- name: Notify certificate renewal via Redmine ticket
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    redmine_project: aap-demo
+
+  tasks:
+    - name: Set JST timestamp
+      ansible.builtin.set_fact:
+        _now_jst: "{{ '%Y-%m-%d %H:%M JST' | strftime(ansible_date_time.epoch | int + 32400) }}"
+
+    - name: Create Redmine issue
+      ansible.builtin.uri:
+        url: "{{ redmine_url }}/issues.json"
+        method: POST
+        body_format: json
+        body:
+          issue:
+            project_id: "{{ redmine_project }}"
+            subject: "証明書更新完了: {{ cert_common_name }}"
+            description: |-
+              自動証明書更新が完了しました。
+
+              |項目|値|
+              |---|---|
+              |対象|{{ cert_common_name }}|
+              |更新前有効期限|{{ cert_not_after_before }}|
+              |更新前残日数|{{ cert_valid_days_before }} 日|
+              |更新日時|{{ _now_jst }}|
+        url_username: "{{ redmine_username }}"
+        url_password: "{{ redmine_password }}"
+        force_basic_auth: true
+        status_code: [200, 201]
+      register: _redmine_result
+
+    - name: Display ticket URL
+      ansible.builtin.debug:
+        msg: "Redmine ticket created: {{ redmine_url }}/issues/{{ _redmine_result.json.issue.id }}"

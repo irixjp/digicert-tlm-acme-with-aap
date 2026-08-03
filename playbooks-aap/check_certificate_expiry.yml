@@ -1,0 +1,56 @@
+---
+# Required variables (from extra_vars):
+#   route53_domain          - e.g. demo.emacs-lisp.net
+#   renewal_threshold_days  - e.g. 20 (renew if days remaining <= this value)
+
+- name: Check certificate expiry for renewal decision
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    cert_fqdn: "apache.{{ route53_domain }}"
+    renewal_threshold_days: 20
+
+  tasks:
+    - name: Set JST timestamp
+      ansible.builtin.set_fact:
+        _today_jst_epoch: "{{ ansible_date_time.epoch | int + 32400 }}"
+
+    - name: Fetch certificate
+      community.crypto.get_certificate:
+        host: "{{ cert_fqdn }}"
+        port: 443
+      register: _cert
+
+    - name: Calculate days remaining
+      ansible.builtin.set_fact:
+        _cert_epoch: >-
+          {{ (_cert.not_after[:14] | to_datetime('%Y%m%d%H%M%S')).strftime('%s') | int }}
+        _not_after_jst: >-
+          {{ '%Y-%m-%d' | strftime((_cert.not_after[:14] | to_datetime('%Y%m%d%H%M%S')).strftime('%s') | int + 32400) }}
+
+    - name: Calculate valid days
+      ansible.builtin.set_fact:
+        _valid_days: >-
+          {{ (('%Y%m%d' | strftime(_cert_epoch | int + 32400) | to_datetime('%Y%m%d')) -
+              ('%Y%m%d' | strftime(_today_jst_epoch | int) | to_datetime('%Y%m%d'))).days }}
+
+    - name: Display certificate status
+      ansible.builtin.debug:
+        msg: >-
+          {{ cert_fqdn }}: {{ _valid_days }} days remaining
+          (expires {{ _not_after_jst }}, threshold {{ renewal_threshold_days }} days)
+
+    - name: Pass expiry data to next job
+      ansible.builtin.set_stats:
+        data:
+          cert_valid_days_before: "{{ _valid_days }}"
+          cert_not_after_before: "{{ _not_after_jst }}"
+      when: _valid_days | int <= renewal_threshold_days | int
+
+    - name: Fail if renewal is needed (triggers failure_nodes in workflow)
+      ansible.builtin.fail:
+        msg: >-
+          Certificate for {{ cert_fqdn }} expires in {{ _valid_days }} days
+          (<= {{ renewal_threshold_days }} day threshold). Starting renewal.
+      when: _valid_days | int <= renewal_threshold_days | int
