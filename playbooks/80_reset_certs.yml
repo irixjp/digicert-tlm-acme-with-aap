@@ -1,0 +1,124 @@
+---
+# デモ前に有効期限が切れそうな自己署名証明書に戻す
+# nginx: 5日有効、apache: 10日有効
+# 既存の秘密鍵はそのまま使用する（force なし）
+
+- name: Reset nginx certificate to self-signed
+  hosts: nginx
+  become: true
+  gather_facts: false
+  vars:
+    _fqdn: "{{ inventory_hostname }}.{{ route53_domain }}"
+    _ssl_dir: /opt/myapp/ssl
+
+  tasks:
+    - name: Generate self-signed certificate (5 days)
+      community.crypto.x509_certificate:
+        path: "{{ _ssl_dir }}/{{ _fqdn }}.crt"
+        privatekey_path: "{{ _ssl_dir }}/{{ _fqdn }}.key"
+        provider: selfsigned
+        selfsigned_not_after: "+5d"
+        force: true
+        mode: "0644"
+
+    - name: Restart nginx
+      ansible.builtin.systemd_service:
+        name: nginx
+        state: restarted
+
+- name: Reset Apache certificate to self-signed
+  hosts: apache
+  become: true
+  gather_facts: false
+  vars:
+    _fqdn: "{{ inventory_hostname }}.{{ route53_domain }}"
+
+  tasks:
+    - name: Generate self-signed certificate (10 days)
+      community.crypto.x509_certificate:
+        path: "/etc/pki/tls/certs/{{ _fqdn }}.crt"
+        privatekey_path: "/etc/pki/tls/private/{{ _fqdn }}.key"
+        provider: selfsigned
+        selfsigned_not_after: "+10d"
+        force: true
+        mode: "0644"
+
+    - name: Restart httpd
+      ansible.builtin.systemd_service:
+        name: httpd
+        state: restarted
+
+- name: Reset F5 certificate to self-signed
+  hosts: f5
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    _f5_provider:
+      server: "{{ ansible_host }}"
+      user: "{{ ansible_user }}"
+      password: "{{ f5_admin_password | default(lookup('env', 'AAP_ADMIN_PASSWORD')) }}"
+      server_port: 8443
+      validate_certs: false
+    _f5_hostname: "f5.{{ route53_domain }}"
+    _cert_dir: /tmp/f5-cert
+
+  tasks:
+    - name: Create temp directory
+      ansible.builtin.file:
+        path: "{{ _cert_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+
+    - name: Generate private key
+      community.crypto.openssl_privatekey:
+        path: "{{ _cert_dir }}/{{ _f5_hostname }}.key"
+        type: RSA
+        size: 2048
+      delegate_to: localhost
+
+    - name: Generate self-signed certificate (15 days)
+      community.crypto.x509_certificate:
+        path: "{{ _cert_dir }}/{{ _f5_hostname }}.crt"
+        privatekey_path: "{{ _cert_dir }}/{{ _f5_hostname }}.key"
+        provider: selfsigned
+        selfsigned_not_after: "+15d"
+        force: true
+      delegate_to: localhost
+
+    - name: Switch SSL profile to default cert temporarily
+      f5networks.f5_modules.bigip_profile_client_ssl:
+        name: demo_clientssl
+        cert_key_chain:
+          - cert: default
+            key: default
+        provider: "{{ _f5_provider }}"
+
+    - name: Import SSL key to F5
+      f5networks.f5_modules.bigip_ssl_key:
+        name: "{{ _f5_hostname }}"
+        content: "{{ lookup('file', _cert_dir + '/' + _f5_hostname + '.key') }}"
+        state: present
+        provider: "{{ _f5_provider }}"
+
+    - name: Import SSL certificate to F5
+      f5networks.f5_modules.bigip_ssl_certificate:
+        name: "{{ _f5_hostname }}"
+        content: "{{ lookup('file', _cert_dir + '/' + _f5_hostname + '.crt') }}"
+        state: present
+        provider: "{{ _f5_provider }}"
+
+    - name: Restore SSL profile to updated cert
+      f5networks.f5_modules.bigip_profile_client_ssl:
+        name: demo_clientssl
+        cert_key_chain:
+          - cert: "{{ _f5_hostname }}"
+            key: "{{ _f5_hostname }}"
+        provider: "{{ _f5_provider }}"
+
+    - name: Remove temp directory
+      ansible.builtin.file:
+        path: "{{ _cert_dir }}"
+        state: absent
+      delegate_to: localhost
