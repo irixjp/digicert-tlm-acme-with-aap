@@ -20,6 +20,14 @@
       validate_certs: false
 
   tasks:
+    - name: Switch SSL profile to default cert temporarily
+      f5networks.f5_modules.bigip_profile_client_ssl:
+        name: demo_clientssl
+        cert_key_chain:
+          - cert: default
+            key: default
+        provider: "{{ f5_provider }}"
+
     - name: Import SSL key to F5
       f5networks.f5_modules.bigip_ssl_key:
         name: "{{ cert_common_name }}"
@@ -32,4 +40,12 @@
         name: "{{ cert_common_name }}"
         content: "{{ fullchain_data }}"
         state: present
+        provider: "{{ f5_provider }}"
+
+    - name: Restore SSL profile to updated cert
+      f5networks.f5_modules.bigip_profile_client_ssl:
+        name: demo_clientssl
+        cert_key_chain:
+          - cert: "{{ cert_common_name }}"
+            key: "{{ cert_common_name }}"
         provider: "{{ f5_provider }}"
