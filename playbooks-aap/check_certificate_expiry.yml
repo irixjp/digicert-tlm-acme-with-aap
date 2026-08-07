@@ -1,5 +1,6 @@
 ---
 # Required variables (from extra_vars):
+#   cert_host               - e.g. apache, nginx, f5 (hostname prefix)
 #   route53_domain          - e.g. demo.emacs-lisp.net
 #   renewal_threshold_days  - e.g. 20 (renew if days remaining <= this value)
 
@@ -8,7 +9,7 @@
   connection: local
   gather_facts: true
   vars:
-    cert_fqdn: "apache.{{ route53_domain }}"
+    cert_fqdn: "{{ cert_host }}.{{ route53_domain }}"
     renewal_threshold_days: 20
 
   tasks:
