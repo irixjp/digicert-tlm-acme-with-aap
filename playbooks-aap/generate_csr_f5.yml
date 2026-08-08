@@ -3,31 +3,31 @@
 #   route53_domain - e.g. demo.emacs-lisp.net
 
 - name: Generate CSR for F5 BIG-IP
-  hosts: localhost
-  connection: local
+  hosts: all
+  become: true
   gather_facts: false
   vars:
     _fqdn: "f5.{{ route53_domain }}"
-    _work_dir: /tmp/f5-acme
+    _key_dir: /opt/f5-cert
 
   tasks:
-    - name: Create work directory
+    - name: Create key directory
       ansible.builtin.file:
-        path: "{{ _work_dir }}"
+        path: "{{ _key_dir }}"
         state: directory
         mode: "0700"
 
     - name: Generate private key
       community.crypto.openssl_privatekey:
-        path: "{{ _work_dir }}/{{ _fqdn }}.key"
+        path: "{{ _key_dir }}/{{ _fqdn }}.key"
         type: RSA
         size: 4096
         mode: "0600"
 
     - name: Generate CSR
       community.crypto.openssl_csr:
-        path: "{{ _work_dir }}/{{ _fqdn }}.csr"
-        privatekey_path: "{{ _work_dir }}/{{ _fqdn }}.key"
+        path: "/tmp/{{ _fqdn }}.csr"
+        privatekey_path: "{{ _key_dir }}/{{ _fqdn }}.key"
         common_name: "{{ _fqdn }}"
         subject_alt_name: "DNS:{{ _fqdn }}"
         key_usage:
@@ -37,22 +37,13 @@
           - clientAuth
           - serverAuth
 
-    - name: Read CSR and key content
+    - name: Read CSR content
       ansible.builtin.slurp:
-        src: "{{ _work_dir }}/{{ _fqdn }}{{ item }}"
-      register: _file_contents
-      loop:
-        - .csr
-        - .key
+        src: "/tmp/{{ _fqdn }}.csr"
+      register: _csr_content
 
-    - name: Pass CSR, key, and common name to next job
+    - name: Pass CSR data to next job
       ansible.builtin.set_stats:
         data:
-          csr_data: "{{ _file_contents.results[0].content | b64decode }}"
-          private_key_data: "{{ _file_contents.results[1].content | b64decode }}"
+          csr_data: "{{ _csr_content.content | b64decode }}"
           cert_common_name: "{{ _fqdn }}"
-
-    - name: Clean up work directory
-      ansible.builtin.file:
-        path: "{{ _work_dir }}"
-        state: absent

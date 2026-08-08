@@ -1,6 +1,5 @@
 ---
 # Required variables (from AAP credentials or extra_vars):
-#   private_key_data   - PEM private key (from Job 1 set_stats)
 #   fullchain_data     - fullchain PEM certificate (from Job 2 set_stats)
 #   cert_common_name   - FQDN e.g. f5.demo.emacs-lisp.net (from Job 1 set_stats)
 #   f5_admin_password  - F5 admin password
@@ -12,6 +11,7 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    _key_dir: /opt/f5-cert
     f5_provider:
       server: "{{ ansible_host }}"
       user: "{{ ansible_user }}"
@@ -20,6 +20,14 @@
       validate_certs: false
 
   tasks:
+    - name: Fetch private key from nginx-f5
+      ansible.builtin.slurp:
+        src: "{{ _key_dir }}/{{ cert_common_name }}.key"
+      delegate_to: nginx-f5
+      become: true
+      register: _private_key
+      no_log: true
+
     - name: Switch SSL profile to default cert temporarily
       f5networks.f5_modules.bigip_profile_client_ssl:
         name: demo_clientssl
@@ -31,9 +39,10 @@
     - name: Import SSL key to F5
       f5networks.f5_modules.bigip_ssl_key:
         name: "{{ cert_common_name }}"
-        content: "{{ private_key_data }}"
+        content: "{{ _private_key.content | b64decode }}"
         state: present
         provider: "{{ f5_provider }}"
+      no_log: true
 
     - name: Import SSL certificate to F5
       f5networks.f5_modules.bigip_ssl_certificate:
