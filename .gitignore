@@ -18,4 +18,4 @@
 !roles/aws_route53_manage_record/
 !roles/aws_route53_manage_record/**
 
-!.gitignore
+!README.md
