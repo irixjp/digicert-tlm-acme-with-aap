@@ -24,6 +24,8 @@
       ansible.builtin.slurp:
         src: "{{ _key_dir }}/{{ cert_common_name }}.key"
       delegate_to: nginx-f5
+      vars:
+        ansible_connection: ssh
       become: true
       register: _private_key
       no_log: true
