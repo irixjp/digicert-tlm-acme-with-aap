@@ -17,6 +17,8 @@
       user: "{{ ansible_user }}"
       password: "{{ f5_admin_password }}"
       server_port: 8443
+      # Demo environment uses a self-signed management certificate.
+      # In production, use a trusted certificate and enable validation.
       validate_certs: false
 
   tasks:
