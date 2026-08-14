@@ -28,7 +28,6 @@
         ansible_connection: ssh
       become: true
       register: _private_key
-      no_log: true
 
     - name: Switch SSL profile to default cert temporarily
       f5networks.f5_modules.bigip_profile_client_ssl:
