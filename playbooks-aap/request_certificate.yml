@@ -66,6 +66,7 @@
       register: _acme_challenge
 
     - name: Extract DNS-01 challenge record and value
+      when: _acme_challenge.challenge_data | length > 0
       vars:
         _json_query: "challenge_data.*"
       ansible.builtin.set_fact:
@@ -74,7 +75,8 @@
         _challenge_value: >-
           {{ (_acme_challenge | community.general.json_query(_json_query))[0]['dns-01']['resource_value'] }}
 
-    - name: Validate challenge and retrieve certificate
+    - name: Complete DNS-01 challenge
+      when: _acme_challenge.challenge_data | length > 0
       block:
         - name: Add TXT record for DNS-01 challenge
           amazon.aws.route53:
@@ -111,6 +113,21 @@
             overwrite: true
             wait: true
             state: absent
+
+    - name: Retrieve certificate (authorization already valid)
+      when: _acme_challenge.challenge_data | length == 0
+      community.crypto.acme_certificate:
+        select_crypto_backend: cryptography
+        acme_version: 2
+        acme_directory: "{{ digicert_acme_dir_url }}"
+        account_key_src: "{{ _work_dir }}/account.pem"
+        modify_account: false
+        csr: "{{ _work_dir }}/{{ cert_common_name }}.csr"
+        dest: "{{ _work_dir }}/{{ cert_common_name }}.pem"
+        fullchain_dest: "{{ _work_dir }}/{{ cert_common_name }}-fullchain.pem"
+        chain_dest: "{{ _work_dir }}/{{ cert_common_name }}-chain.pem"
+        challenge: dns-01
+        data: "{{ _acme_challenge }}"
 
     - name: Read certificate files
       ansible.builtin.slurp:
